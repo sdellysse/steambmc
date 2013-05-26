@@ -1,5 +1,5 @@
 """
-SteamBMC: XBMC Addon for Steam
+SteamBMC: XBMC Addon to Browse and Launch Steam Games
 Copyright (C) 2013 T. Oldbury
 
 This program is free software; you can redistribute it and/or
@@ -18,7 +18,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301, USA.
 """
 
-import os, re, sys, shutil, urlparse
+import os, re, sys, shutil, urlparse, time
 import xbmcplugin, xbmcgui, xbmcaddon, xbmc
 import steamapi
 
@@ -32,6 +32,25 @@ lang = addon.getLocalizedString
 ARTWORK_CACHE_DIR = xbmc.translatePath(os.path.join("special://masterprofile", "addon_data", addon_name, "artworkcache"))
 
 """
+waitFor: Wait n seconds for a function to change state. (Useful for
+         waiting for a cancel button to be pressed, etc.)
+
+@param      secs    How long to wait, in seconds. Approximately.
+
+@param      call    Callback to check.
+
+@return     True if call() returned True eventually, False if it never did.
+"""
+def waitFor(secs, call):
+    # Check every 0.1 seconds.
+    while secs >= 0:
+        if call():
+            return True
+        secs -= 0.1
+        time.sleep(0.1) 
+    return False
+
+"""
 checkWindowsBits: Are we running 32-bit or 64-bit Windows? 
 
 @return     32 for 32-bit OR non-Windows, 64 for 64-bit Windows
@@ -42,10 +61,18 @@ def checkWindowsBits():
     else:
         return 32
 
+"""
+showSettingsDialog: Launch the settings dialog for this plugin. When the dialog 
+                    is closed, check the chosen settings are OK (through verifySettings.)
+"""
 def showSettingsDialog():
     addon.openSettings()
     verifySettings()
 
+"""
+verifySettings: Check that some of the settings that have been chosen are OK. If not, 
+                show an error message.
+"""
 def verifySettings():
     # Check Steam bin exists
     steam_bin = addon.getSetting("steam_bin")
@@ -57,6 +84,9 @@ def verifySettings():
         return False
     return True
 
+"""
+setupDefaultSettings: Fill out Steam binary and other settings, for first run.
+"""
 def setupDefaultSettings():
     # Detect OS and fill out Steam binary
     if sys.platform.startswith("win"): 
@@ -67,6 +97,7 @@ def setupDefaultSettings():
     elif sys.platform.startswith("linux"): 
         addon.setSetting("steam_bin", "Linux Steam directory auto-fill TODO")
 
+# Main entry point
 if __name__ == "__main__":
     xbmc.log("SteamBMC (%s) Version %s" % (addon_name, addon_version))
     ifc = steamapi.SteamCommunityIfc(addon.getSetting("steam_publicurl"))
@@ -89,6 +120,8 @@ if __name__ == "__main__":
         xbmc.log("Generating owned games list", xbmc.LOGDEBUG)
         progress = xbmcgui.DialogProgress()
         progress.create(lang(33011), lang(33015))
+        progress.update(5, lang(330101))
+        steamapi.steamCheck()
         # Add settings item
         listitem = xbmcgui.ListItem("Settings")
         xbmcplugin.addDirectoryItem(handle, sys.argv[0] + "?do=settings", listitem, isFolder=False)
@@ -113,16 +146,27 @@ if __name__ == "__main__":
         xbmc.log("Generating owned games list", xbmc.LOGDEBUG)
         progress = xbmcgui.DialogProgress()
         progress.create(lang(33018), lang(33012))
-        progress.update(25)
+        progress.update(50)
         try:
             ifc.getOwnedGames(get_art=False)
         except RuntimeError:
             xbmcgui.Dialog().ok(lang(33041), lang(33042) % ifc.http_code)
         for game in ifc.owned_games:
-            print game, game.game_id, game.game_name, cmd['game_id']
             if game.game_id == int(cmd['game_id'][0]):
-                progress.update(75, lang(33019))
-                game.launchGame()
+                progress.update(100, lang(33019))
+                if not game.launchGame():
+                    progress.close()
+                    if addon.getSetting("game_notify"):
+                        xbmcgui.Dialog().ok(lang(33051), lang(33052))
+                else:
+                    if int(addon.getSetting("game_onlaunch")) == 1:
+                        progress.update(100, lang(330102))
+                        if not waitFor(5, progress.iscanceled):
+                            xbmc.executebuiltin("Minimize()")
+                    elif int(addon.getSetting("game_onlaunch")) == 2:
+                        progress.update(100, lang(330103))
+                        if not waitFor(5, progress.iscanceled):
+                            xbmc.executebuiltin("Quit()")
                 break
     elif cmd['do'][0] == "refresh_cache":
         progress = xbmcgui.DialogProgress()

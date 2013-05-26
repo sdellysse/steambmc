@@ -20,11 +20,15 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 
 import urllib, urllib2
 import xml.sax
-import os, shutil, sys
+import os, shutil, sys, time, random
 import xbmc, xbmcaddon
 from PIL import Image
-import random
-
+# Import appropriate apputils
+if sys.platform.startswith("win"):
+    import winutils as _coreapputils
+else:
+    raise RuntimeError, "platform `%s' not yet supported... sorry!" % sys.platform
+    
 addon = xbmcaddon.Addon()
 addon_name = addon.getAddonInfo('name')
 lang = addon.getLocalizedString
@@ -35,6 +39,14 @@ STEAM_BIN = addon.getSetting("steam_bin")
 
 XBMC_WIDEBANNERSIZE = (758, 140)
 XBMC_TALLICONSIZE = (256, 256)
+
+"""
+steamCheck:     Start Steam in the background if it is not already running.
+
+TODO: Add support for auto log in.
+"""
+def steamCheck():
+    _coreapputils.launchFork("\"%s\" -silent" % STEAM_BIN.replace('"', '\"'))
 
 """
 getValveCdn:    Return a random cdn number for steampowered.com
@@ -258,17 +270,15 @@ class SteamGame(object):
 
     """
     launchGame:	Launch this game using Steam. Takes account of platform.
+    
+    @return     True if believed successful, False if not
     """
     def launchGame(self):
-        # We only support Windows at present, however, it should be trivial
-        # to add support for Linux and OS X here. Just add a new sys.platform
-        # check. This should be the only really platform-dependent part.
-        print "You are running: ", sys.platform
-        if sys.platform.startswith("win"): # Windows
-            print "Starting Steam game #%d under Windows" % self.game_id
-            os.system("\"%s\" -applaunch %d" % (STEAM_BIN.replace('"', '\"'), self.game_id))
-        else:
-            raise RuntimeError, "Platform " + sys.platform + " not yet supported."
+        _coreapputils.launchFork("\"%s\" -applaunch %d" % (STEAM_BIN.replace('"', '\"'), self.game_id))
+        time.sleep(5) # Give Steam a few seconds to start.
+        if os.path.basename(STEAM_BIN) not in _coreapputils.getProcessesList():
+            return False
+        return True
 
 class SteamCommunityIfc(object):
     """
@@ -319,12 +329,12 @@ class SteamCommunityIfc(object):
     """
     def getOwnedGames(self, get_art=True, art_update=False, prog_callback=None):
         if hasattr(prog_callback, "update"): 
-            prog_callback.update(5, lang(33012))
+            prog_callback.update(10, lang(33012))
         data = getUrlReq('http://steamcommunity.com/id/' + self._public_name + '/games?tab=all&xml=1')
         if data == None:
             raise RuntimeError, "Can't connect to SteamCommunity.com for games list"
         if hasattr(prog_callback, "update"): 
-            prog_callback.update(10, lang(33013))
+            prog_callback.update(15, lang(33013))
         sax_engine = SteamGameInfoParser()
         xml.sax.parseString(data, sax_engine)
         # Import the game data: create a new SteamGame for each entry.
@@ -333,12 +343,12 @@ class SteamCommunityIfc(object):
         for game_info in sax_engine.games:
             if hasattr(prog_callback, "update"):
                 # We don't get here with zero games, so we're not worried about a divide by zero error.
-                prog_callback.update(10 + int((float(num) / float(num_games)) * 90), lang(33014) % game_info['name'].strip())
+                prog_callback.update(15 + int((float(num) / float(num_games)) * 85), lang(33014) % game_info['name'].strip())
                 if prog_callback.iscanceled():
                     # If cancelled abort fetch of all games so we don't get an inconsistent list
                     self.owned_games = []
                     break
-            game = SteamGame(int(game_info['appID']), game_info['name'].strip())
+            game = SteamGame(int(game_info['appID']), game_info['name'].strip().encode('utf-8'))
             if 'hoursLast2Weeks' in game_info and 'hoursOnRecord' in game_info:
                 game.setPlayTime(float(game_info['hoursLast2Weeks']), float(game_info['hoursOnRecord']))
             else:
